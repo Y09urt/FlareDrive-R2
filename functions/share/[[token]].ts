@@ -1,4 +1,4 @@
-import { notFound, parseBucketPath } from "@/utils/bucket";
+import { notFound, objectResponse, parseBucketPath } from "@/utils/bucket";
 
 function htmlEscape(value: string) {
   return value
@@ -53,17 +53,13 @@ export async function onRequestGet(context) {
 
   const [bucket] = parseBucketPath(context);
   if (!bucket) return notFound();
-  const object = await bucket.get(share.object_key);
-  if (!object) return notFound();
 
   const headers = new Headers();
-  object.writeHttpMetadata(headers);
-  headers.set("etag", object.httpEtag);
   headers.set(
     "Content-Disposition",
     `attachment; filename="${encodeURIComponent(
       String(share.object_key).split("/").pop() || "download"
     )}"`
   );
-  return new Response(object.body, { headers });
+  return objectResponse(bucket, share.object_key, context.request, { headers });
 }
