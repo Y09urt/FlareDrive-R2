@@ -127,6 +127,7 @@ import {
   blobDigest,
   multipartUpload,
   SIZE_LIMIT,
+  writeItemUrl,
 } from "/assets/main.mjs";
 
 export default {
@@ -295,12 +296,12 @@ export default {
     async createFolder() {
       const folderName = window.prompt("文件夹名称");
       if (!folderName) return;
-      await axios.put(`/api/write/items/${this.cwd}${folderName}/_$folder$`, "");
+      await axios.put(writeItemUrl(`${this.cwd}${folderName}/_$folder$`), "");
       await this.fetchFiles();
     },
     async removeFile(key) {
       if (!window.confirm(`删除 ${key}？`)) return;
-      const res = await axios.delete(`/api/write/items/${key}`).catch((error) => error.response);
+      const res = await axios.delete(writeItemUrl(key)).catch((error) => error.response);
       if (!res || res.status >= 400) return this.showMessage("删除失败");
       await this.fetchFiles();
     },
@@ -331,7 +332,7 @@ export default {
         try {
           const thumbnailBlob = await generateThumbnail(file);
           const digestHex = await blobDigest(thumbnailBlob);
-          await axios.put(`api/write/items/_$flaredrive$/thumbnails/${digestHex}.png`, thumbnailBlob);
+          await axios.put(writeItemUrl(`_$flaredrive$/thumbnails/${digestHex}.png`), thumbnailBlob);
           headers["fd-thumbnail"] = digestHex;
         } catch (_) {
           headers["fd-thumbnail"] = "";
@@ -343,7 +344,7 @@ export default {
         if (file.size >= SIZE_LIMIT) {
           await multipartUpload(key, file, { headers, onUploadProgress });
         } else {
-          await axios.put(`/api/write/items/${key}`, file, { headers, onUploadProgress });
+          await axios.put(writeItemUrl(key), file, { headers, onUploadProgress });
         }
       } catch (_) {
         this.showMessage(`上传失败：${file.name}`);

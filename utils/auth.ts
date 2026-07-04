@@ -199,7 +199,12 @@ export async function can_access_path(context: any, targetPath: string) {
 export async function get_auth_status(context: any) {
   const dopath = context.request.url.split("/api/write/items/")[1];
   if (!dopath) return false;
-  const targetPath = decodeURIComponent(dopath.split("?")[0]);
+  let targetPath = dopath.split("?")[0];
+  try {
+    targetPath = decodeURIComponent(targetPath);
+  } catch {
+    return false;
+  }
   return can_access_path(context, targetPath);
 }
 

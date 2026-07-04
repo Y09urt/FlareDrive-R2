@@ -54,6 +54,18 @@ export async function blobDigest(blob) {
 
 export const SIZE_LIMIT = 8 * 1024 * 1024; // 8MiB, safely above R2's 5MiB multipart minimum.
 
+export function encodeObjectKey(key) {
+  return key
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
+export function writeItemUrl(key, params) {
+  const query = params ? `?${new URLSearchParams(params)}` : "";
+  return `/api/write/items/${encodeObjectKey(key)}${query}`;
+}
+
 /**
  * @param {string} key
  * @param {File} file
@@ -64,16 +76,15 @@ export async function multipartUpload(key, file, options) {
   headers["content-type"] = file.type;
 
   const uploadId = await axios
-    .post(`/api/write/items/${key}?uploads`, "", { headers })
+    .post(writeItemUrl(key, { uploads: "" }), "", { headers })
     .then((res) => res.data.uploadId);
   const totalChunks = Math.ceil(file.size / SIZE_LIMIT);
 
   const promiseGenerator = function* () {
     for (let i = 1; i <= totalChunks; i++) {
       const chunk = file.slice((i - 1) * SIZE_LIMIT, i * SIZE_LIMIT);
-      const searchParams = new URLSearchParams({ partNumber: i, uploadId });
       yield axios
-        .put(`/api/write/items/${key}?${searchParams}`, chunk, {
+        .put(writeItemUrl(key, { partNumber: i, uploadId }), chunk, {
           onUploadProgress(progressEvent) {
             if (typeof options?.onUploadProgress !== "function") return;
             options.onUploadProgress({
@@ -94,8 +105,7 @@ export async function multipartUpload(key, file, options) {
     const { partNumber, etag } = await part;
     uploadedParts[partNumber - 1] = { partNumber, etag };
   }
-  const completeParams = new URLSearchParams({ uploadId });
-  await axios.post(`/api/write/items/${key}?${completeParams}`, {
+  await axios.post(writeItemUrl(key, { uploadId }), {
     parts: uploadedParts,
   });
 }
