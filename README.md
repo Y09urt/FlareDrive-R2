@@ -1,136 +1,55 @@
-## FlareDrive-R2 使用文档
+# FlareDrive-R2
 
-### 🌟 项目简介
+基于 Cloudflare Pages Functions、R2 和 D1 的轻量网盘。现在支持：
 
-FlareDrive-R2 是基于 Cloudflare R2 + Workers 构建的在线网盘系统，支持：
-- 文件上传/下载/分享
-- 多用户权限管理
-- 目录级访问控制
-- 静态文件托管
+- Web 端上传、下载、目录浏览、删除
+- 账号注册、登录和 HttpOnly 会话 Cookie
+- 文件分享链接
+- 文字暂存和文字分享链接
+- 管理员与普通用户隔离目录
 
-> 📌 本项目修改自 [Cloudflare-R2-oss](https://github.com/ljxi/Cloudflare-R2-oss)，实现了更加美观的前端页面，本人并不擅长`CF Worker`开发，所以如果有功能方面的需求，请在上游仓库提出。
+## 资源绑定
 
-### 🚀 快速部署
+项目使用两个 Cloudflare 绑定：
 
-### 前置要求
+| 绑定名 | 类型 | 用途 |
+| --- | --- | --- |
+| `BUCKET` | R2 Bucket | 保存文件内容 |
+| `DB` | D1 Database | 保存用户、会话、分享和文字暂存 |
 
-- Cloudflare 账号
-- 已开通 R2 服务
+`wrangler.toml` 已声明这两个绑定。部署前需要把 `database_id` 替换为你的 D1 数据库 ID，`bucket_name` 替换为你的 R2 bucket 名称。
 
-### 部署步骤
+## 本地运行
 
-### 1. 准备存储桶
+```bash
+npm install
+npm run types
+npx wrangler d1 execute flaredrive-r2 --local --file migrations/0001_init.sql
+npm run dev
+```
 
-前往 Cloudflare R2 控制台：
+打开 Wrangler 输出的本地地址。第一次注册的账号会自动成为管理员。
 
-1. 新建存储桶（建议名称全小写）
+## 部署
 
-   ![QQ_1744351903148](docs/create-bucket.png)
+1. 在 Cloudflare 创建 R2 bucket。
+2. 在 Cloudflare 创建 D1 database。
+3. 修改 `wrangler.toml` 中的 `bucket_name`、`database_name`、`database_id`。
+4. 执行远端 D1 初始化：
 
-2. 创建完成后，点开设置页面，在存储桶设置中启用「公开访问」
+```bash
+npx wrangler d1 execute flaredrive-r2 --remote --file migrations/0001_init.sql
+```
 
-   ![QQ_1744352059947](docs/r2.dev.png)
+5. 部署 Pages 项目，确保 Pages 的 R2 和 D1 绑定名分别是 `BUCKET` 和 `DB`。
+6. 首次打开站点并注册管理员账号。
 
-3. 复制“公共存储桶 URL”，格式如下：
+## 注册策略
+
+默认只有第一个用户能注册，且会成为管理员。后续如果要开放注册，在 Pages 环境变量中设置：
 
 ```txt
-https://pub-kdsjfhlasnwiuweia4387rfho85tnof4.r2.dev
+ALLOW_SIGNUP=true
 ```
 
-### 2. 部署 Pages 服务
-
-1. Fork 本项目仓库到你的 GitHub
-2. 打开 Cloudflare Pages，新建一个站点
-3. 点击「连接到 Git」并选择你的仓库
-4. 保持默认的构建设置即可，第一次构建不会显示内容，为正常现象
-
-### 3. 配置环境变量
-
-![QQ_1744352357624](docs/secret.png)
-
-在 Cloudflare Pages 项目中，进入 **Settings → Environment Variables** 添加以下变量：
-
-| 变量名         | 示例值                                                | 是否必要 | 说明                                           |
-| -------------- | ----------------------------------------------------- | -------- | ---------------------------------------------- |
-| `PUBURL`       | `https://pub-kdsjfhlasnwiuweia4387rfho85tnof4.r2.dev` | ✅ 必填   | R2 公共存储桶地址                              |
-| `admin:123456` | `*`                                                   | ✅ 必填   | 管理员账号，格式为 `用户名:密码`               |
-| `GUEST`        | `public/`                                             | ❌ 可选   | 游客写入的默认目录                             |
-| `user1:123456` | `user1/,shared/`                                      | ❌ 可选   | 普通用户及其可写入目录，支持多个目录，格式一致 |
-
-<p style="color: red !important; font-weight: bold;">
-  ⚠️ 请勿开启 R2 存储桶的公开读写权限！否则你的存储资源可能会被恶意刷爆。
-</p>
-
-### 4. 绑定 R2 存储桶
-
-部署完成后：
-
-1. 进入 Cloudflare Pages 项目设置
-2. 点击「R2 存储桶」
-3. 添加一个绑定，变量名填写为：
-
-```
-BUCKET
-```
-
-并选择你的 R2 存储桶。
-
-### 5. 重新部署项目
-
-完成所有设置后，回到 Pages 控制台，点击「Deployments」页面右上角的「Trigger Redeploy」以重新部署服务。
-
-### ⚙️ 自定义配置
-
-#### 前端样式修改
-
-由于 Wrangler 部署无法使用传统环境变量注入，我偷懒了，不想写环境变量，但是仍然可以简单的进行修改，请直接修改以下文件：
-
-1. **背景图片**  
-   修改文件：`assets/App.vue`  
-   
-   ```vue
-   // 约第 213 行
-   export default {
-     data: () => ({
-       ...
-       backgroundImageUrl: "/assets/bg-light.webp"
-     }),
-   }
-   ```
-   
-2. **页脚链接**  
-   修改文件：`assets/Footer.vue`  
-   
-   ```html
-   // 约第四十行
-   <script>
-   export default {
-     name: "Footer",
-     data() {
-       return {
-         homeUrl: "https://www.liushen.fun/",
-         blogUrl: "https://blog.liushen.fun/",
-         githubUrl: "https://github.com/willow-god",
-         emailUrl: "mailto:01@liushen.fun"
-       };
-     }
-   };
-   </script>
-   ```
-
-#### 权限配置技巧
-
-- 使用 `*` 作为值表示拥有所有目录权限
-- 目录名必须以 `/` 结尾
-- 避免在值的前后添加多余逗号（如 `,dir1/,` 会错误授予全部权限）
-
-### 🔧 故障排查
-
-1. 文件上传失败：
-   - 检查 R2 存储桶是否已绑定
-   - 确认用户有目标目录的写入权限
-
-2. 样式未更新：
-   - 清除浏览器缓存
-   - 确认修改已提交并重新部署
-
+普通用户只能访问自己的 `users/{id}/` 目录；管理员可以访问全部对象。

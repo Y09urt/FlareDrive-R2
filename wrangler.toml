@@ -1,0 +1,13 @@
+name = "flaredrive-r2"
+compatibility_date = "2026-07-04"
+pages_build_output_dir = "."
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "flaredrive-r2"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "flaredrive-r2"
+database_id = "4b8d7a73-8963-4544-89c7-a0342a7ea493"
+migrations_dir = "migrations"

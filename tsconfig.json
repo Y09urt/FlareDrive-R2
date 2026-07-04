@@ -3,7 +3,9 @@
     "target": "ES2021",
     "module": "CommonJS",
     "lib": ["ES2021"],
-    "types": ["@cloudflare/workers-types"],
+    "strict": false,
+    "skipLibCheck": true,
+    "useUnknownInCatchVariables": false,
     "paths": {
       "@/*": ["./*"]
     }
