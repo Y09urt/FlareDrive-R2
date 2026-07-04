@@ -149,7 +149,7 @@ import {
   singleUpload,
   SIZE_LIMIT,
   writeItemUrl,
-} from "/assets/main.mjs?v=20260704-share2";
+} from "/assets/main.mjs?v=20260704-speed1";
 
 export default {
   data: () => ({

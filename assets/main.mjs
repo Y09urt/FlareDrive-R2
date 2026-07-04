@@ -54,6 +54,7 @@ export async function blobDigest(blob) {
 
 export const SIZE_LIMIT = 6 * 1024 * 1024; // 6MiB, above R2's 5MiB multipart minimum with more room for proxy limits.
 const MAX_UPLOAD_ATTEMPTS = 8;
+const MAX_UPLOAD_CONCURRENCY = 3;
 const UPLOAD_STATE_PREFIX = "flaredrive:multipart:";
 
 export function encodeObjectKey(key) {
@@ -162,6 +163,18 @@ function completedBytes(parts, fileSize) {
   }, 0);
 }
 
+function emitUploadProgress(options, uploadedParts, inFlightProgress, fileSize) {
+  if (typeof options?.onUploadProgress !== "function") return;
+  const inFlightBytes = Object.values(inFlightProgress).reduce(
+    (total, loaded) => total + loaded,
+    0
+  );
+  options.onUploadProgress({
+    loaded: Math.min(completedBytes(uploadedParts, fileSize) + inFlightBytes, fileSize),
+    total: fileSize,
+  });
+}
+
 export async function singleUpload(key, file, options) {
   const headers = options?.headers || {};
   await withUploadRetry(() =>
@@ -203,40 +216,44 @@ export async function multipartUpload(key, file, options) {
   const uploadId = state.uploadId;
   const uploadedParts = state.parts || [];
 
-  if (typeof options?.onUploadProgress === "function" && uploadedParts.length) {
-    options.onUploadProgress({
-      loaded: completedBytes(uploadedParts, file.size),
-      total: file.size,
-    });
+  const inFlightProgress = {};
+  emitUploadProgress(options, uploadedParts, inFlightProgress, file.size);
+
+  const missingPartNumbers = [];
+  for (let i = 1; i <= totalChunks; i++) {
+    if (!uploadedParts[i - 1]) missingPartNumbers.push(i);
   }
 
-  const promiseGenerator = function* () {
-    for (let i = 1; i <= totalChunks; i++) {
-      if (uploadedParts[i - 1]) continue;
-      const chunk = file.slice((i - 1) * SIZE_LIMIT, i * SIZE_LIMIT);
-      yield withUploadRetry(() =>
-        axios.put(writeItemUrl(key, { partNumber: i, uploadId }), chunk, {
+  let nextPartIndex = 0;
+  async function uploadPart(partNumber) {
+    const chunk = file.slice((partNumber - 1) * SIZE_LIMIT, partNumber * SIZE_LIMIT);
+    const res = await withUploadRetry(() => {
+      inFlightProgress[partNumber] = 0;
+      emitUploadProgress(options, uploadedParts, inFlightProgress, file.size);
+      return axios.put(writeItemUrl(key, { partNumber, uploadId }), chunk, {
           onUploadProgress(progressEvent) {
-            if (typeof options?.onUploadProgress !== "function") return;
-            options.onUploadProgress({
-              loaded: (i - 1) * SIZE_LIMIT + progressEvent.loaded,
-              total: file.size,
-            });
+            inFlightProgress[partNumber] = progressEvent.loaded || 0;
+            emitUploadProgress(options, uploadedParts, inFlightProgress, file.size);
           },
-        })
-      ).then((res) => ({
-        partNumber: i,
-        etag: res.headers.etag,
-      }));
-    }
-  };
-
-  for (const part of promiseGenerator()) {
-    const { partNumber, etag } = await part;
-    uploadedParts[partNumber - 1] = { partNumber, etag };
+      });
+    });
+    delete inFlightProgress[partNumber];
+    uploadedParts[partNumber - 1] = { partNumber, etag: res.headers.etag };
     state.parts = uploadedParts;
     saveUploadState(key, file, state);
+    emitUploadProgress(options, uploadedParts, inFlightProgress, file.size);
   }
+
+  async function uploadWorker() {
+    while (nextPartIndex < missingPartNumbers.length) {
+      const partNumber = missingPartNumbers[nextPartIndex++];
+      await uploadPart(partNumber);
+    }
+  }
+
+  const workerCount = Math.min(MAX_UPLOAD_CONCURRENCY, missingPartNumbers.length);
+  await Promise.all(Array.from({ length: workerCount }, () => uploadWorker()));
+
   const parts = uploadedParts.filter(Boolean).sort((a, b) => a.partNumber - b.partNumber);
   if (parts.length !== totalChunks) {
     throw new Error("Upload interrupted, please retry the same file");
