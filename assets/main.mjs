@@ -52,7 +52,8 @@ export async function blobDigest(blob) {
   return digestHex;
 }
 
-export const SIZE_LIMIT = 8 * 1024 * 1024; // 8MiB, safely above R2's 5MiB multipart minimum.
+export const SIZE_LIMIT = 6 * 1024 * 1024; // 6MiB, above R2's 5MiB multipart minimum with more room for proxy limits.
+const MAX_UPLOAD_ATTEMPTS = 4;
 
 export function encodeObjectKey(key) {
   return key
@@ -66,6 +67,40 @@ export function writeItemUrl(key, params) {
   return `/api/write/items/${encodeObjectKey(key)}${query}`;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableUploadError(error) {
+  if (!error.response) return true;
+  return error.response.status === 408 || error.response.status >= 500;
+}
+
+function uploadErrorMessage(error) {
+  return (
+    error?.response?.data?.error ||
+    error?.response?.data ||
+    error?.message ||
+    "Upload failed"
+  );
+}
+
+async function withUploadRetry(operation) {
+  let lastError;
+  for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableUploadError(error) || attempt === MAX_UPLOAD_ATTEMPTS) {
+        break;
+      }
+      await sleep(500 * attempt);
+    }
+  }
+  throw new Error(uploadErrorMessage(lastError));
+}
+
 /**
  * @param {string} key
  * @param {File} file
@@ -75,16 +110,18 @@ export async function multipartUpload(key, file, options) {
   const headers = options?.headers || {};
   headers["content-type"] = file.type;
 
-  const uploadId = await axios
-    .post(writeItemUrl(key, { uploads: "" }), "", { headers })
-    .then((res) => res.data.uploadId);
+  const uploadId = await withUploadRetry(() =>
+    axios
+      .post(writeItemUrl(key, { uploads: "" }), "", { headers })
+      .then((res) => res.data.uploadId)
+  );
   const totalChunks = Math.ceil(file.size / SIZE_LIMIT);
 
   const promiseGenerator = function* () {
     for (let i = 1; i <= totalChunks; i++) {
       const chunk = file.slice((i - 1) * SIZE_LIMIT, i * SIZE_LIMIT);
-      yield axios
-        .put(writeItemUrl(key, { partNumber: i, uploadId }), chunk, {
+      yield withUploadRetry(() =>
+        axios.put(writeItemUrl(key, { partNumber: i, uploadId }), chunk, {
           onUploadProgress(progressEvent) {
             if (typeof options?.onUploadProgress !== "function") return;
             options.onUploadProgress({
@@ -93,10 +130,10 @@ export async function multipartUpload(key, file, options) {
             });
           },
         })
-        .then((res) => ({
-          partNumber: i,
-          etag: res.headers.etag,
-        }));
+      ).then((res) => ({
+        partNumber: i,
+        etag: res.headers.etag,
+      }));
     }
   };
 
@@ -105,7 +142,9 @@ export async function multipartUpload(key, file, options) {
     const { partNumber, etag } = await part;
     uploadedParts[partNumber - 1] = { partNumber, etag };
   }
-  await axios.post(writeItemUrl(key, { uploadId }), {
-    parts: uploadedParts,
-  });
+  await withUploadRetry(() =>
+    axios.post(writeItemUrl(key, { uploadId }), {
+      parts: uploadedParts,
+    })
+  );
 }

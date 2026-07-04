@@ -128,7 +128,7 @@ import {
   multipartUpload,
   SIZE_LIMIT,
   writeItemUrl,
-} from "/assets/main.mjs";
+} from "/assets/main.mjs?v=20260704-upload2";
 
 export default {
   data: () => ({
@@ -346,8 +346,13 @@ export default {
         } else {
           await axios.put(writeItemUrl(key), file, { headers, onUploadProgress });
         }
-      } catch (_) {
-        this.showMessage(`上传失败：${file.name}`);
+      } catch (error) {
+        const detail =
+          error?.response?.data?.error ||
+          error?.response?.data ||
+          error?.message ||
+          "";
+        this.showMessage(`上传失败：${file.name}${detail ? ` (${detail})` : ""}`);
       }
       this.processUploadQueue();
     },

@@ -9,7 +9,7 @@
     <script src="https://cdn.jsdmirror.com/npm/vue3-sfc-loader@0.9.5/dist/vue3-sfc-loader.min.js"></script>
     <script defer src="https://events.vercount.one/js"></script>
     <link rel='stylesheet' href='https://static.zeoseven.com/zsft/243/main/result.css' />
-    <link rel="prefetch" href="/assets/main.mjs" />
+    <link rel="prefetch" href="/assets/main.mjs?v=20260704-upload2" />
     <link rel="stylesheet" href="/assets/main.css" />
     <link rel="manifest" href="/assets/manifest.json" />
     <link rel="icon" type="image/png" href="/favicon.ico" />
@@ -22,7 +22,7 @@
       const options = {
         moduleCache: { vue: Vue },
         async getFile(url) {
-          const res = await fetch(url);
+          const res = await fetch(url, { cache: "no-store" });
           if (!res.ok)
             throw Object.assign(new Error(res.statusText + " " + url), { res });
           return {
@@ -41,7 +41,7 @@
       const app = Vue.createApp({
         components: {
           App: Vue.defineAsyncComponent(() =>
-            loadModule("/assets/App.vue", options)
+            loadModule("/assets/App.vue?v=20260704-upload2", options)
           ),
         },
         template: "<App></App>",
