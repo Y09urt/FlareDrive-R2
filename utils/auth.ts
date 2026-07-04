@@ -1,7 +1,6 @@
 const THUMBNAIL_PREFIX = "_$flaredrive$/thumbnails/";
 const SESSION_COOKIE = "fd_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
-const PASSWORD_ITERATIONS = 120000;
 
 const encoder = new TextEncoder();
 
@@ -69,7 +68,19 @@ export function randomHex(byteLength = 32) {
   return bytesToHex(bytes);
 }
 
-export async function hashPassword(password: string, salt = randomHex(16)) {
+async function sha256Password(password: string, salt: string) {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    encoder.encode(`${salt}:${password}`)
+  );
+  return bytesToHex(new Uint8Array(digest));
+}
+
+async function pbkdf2Password(
+  password: string,
+  salt: string,
+  iterations: number
+) {
   const key = await crypto.subtle.importKey(
     "raw",
     encoder.encode(password),
@@ -82,40 +93,31 @@ export async function hashPassword(password: string, salt = randomHex(16)) {
       name: "PBKDF2",
       hash: "SHA-256",
       salt: hexToBytes(salt),
-      iterations: PASSWORD_ITERATIONS,
+      iterations,
     },
     key,
     256
   );
-  return `pbkdf2_sha256$${PASSWORD_ITERATIONS}$${salt}$${bytesToHex(
-    new Uint8Array(bits)
-  )}`;
+  return bytesToHex(new Uint8Array(bits));
+}
+
+export async function hashPassword(password: string, salt = randomHex(16)) {
+  return `sha256$${salt}$${await sha256Password(password, salt)}`;
 }
 
 export async function verifyPassword(password: string, storedHash: string) {
   const [scheme, iterations, salt, expected] = storedHash.split("$");
+  if (scheme === "sha256") {
+    const [, shaSalt, shaExpected] = storedHash.split("$");
+    if (!shaSalt || !shaExpected) return false;
+    return (await sha256Password(password, shaSalt)) === shaExpected;
+  }
+
   if (scheme !== "pbkdf2_sha256" || !iterations || !salt || !expected) {
     return false;
   }
 
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(password),
-    "PBKDF2",
-    false,
-    ["deriveBits"]
-  );
-  const bits = await crypto.subtle.deriveBits(
-    {
-      name: "PBKDF2",
-      hash: "SHA-256",
-      salt: hexToBytes(salt),
-      iterations: Number(iterations),
-    },
-    key,
-    256
-  );
-  return bytesToHex(new Uint8Array(bits)) === expected;
+  return (await pbkdf2Password(password, salt, Number(iterations))) === expected;
 }
 
 export async function createSession(context: any, userId: number) {
