@@ -126,9 +126,10 @@ import {
   generateThumbnail,
   blobDigest,
   multipartUpload,
+  singleUpload,
   SIZE_LIMIT,
   writeItemUrl,
-} from "/assets/main.mjs?v=20260704-upload2";
+} from "/assets/main.mjs?v=20260704-upload3";
 
 export default {
   data: () => ({
@@ -344,7 +345,7 @@ export default {
         if (file.size >= SIZE_LIMIT) {
           await multipartUpload(key, file, { headers, onUploadProgress });
         } else {
-          await axios.put(writeItemUrl(key), file, { headers, onUploadProgress });
+          await singleUpload(key, file, { headers, onUploadProgress });
         }
       } catch (error) {
         const detail =

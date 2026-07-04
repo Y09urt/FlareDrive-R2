@@ -53,7 +53,8 @@ export async function blobDigest(blob) {
 }
 
 export const SIZE_LIMIT = 6 * 1024 * 1024; // 6MiB, above R2's 5MiB multipart minimum with more room for proxy limits.
-const MAX_UPLOAD_ATTEMPTS = 4;
+const MAX_UPLOAD_ATTEMPTS = 8;
+const UPLOAD_STATE_PREFIX = "flaredrive:multipart:";
 
 export function encodeObjectKey(key) {
   return key
@@ -69,6 +70,13 @@ export function writeItemUrl(key, params) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function waitForOnline() {
+  if (navigator.onLine) return Promise.resolve();
+  return new Promise((resolve) => {
+    window.addEventListener("online", resolve, { once: true });
+  });
 }
 
 function isRetryableUploadError(error) {
@@ -89,16 +97,79 @@ async function withUploadRetry(operation) {
   let lastError;
   for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
     try {
+      await waitForOnline();
       return await operation();
     } catch (error) {
       lastError = error;
       if (!isRetryableUploadError(error) || attempt === MAX_UPLOAD_ATTEMPTS) {
         break;
       }
-      await sleep(500 * attempt);
+      await waitForOnline();
+      await sleep(Math.min(1000 * attempt, 8000));
     }
   }
   throw new Error(uploadErrorMessage(lastError));
+}
+
+function uploadStateKey(key, file) {
+  return `${UPLOAD_STATE_PREFIX}${key}:${file.name}:${file.size}:${file.lastModified}`;
+}
+
+function loadUploadState(key, file) {
+  try {
+    const value = localStorage.getItem(uploadStateKey(key, file));
+    if (!value) return null;
+    const state = JSON.parse(value);
+    if (
+      state.key !== key ||
+      state.size !== file.size ||
+      state.lastModified !== file.lastModified ||
+      state.chunkSize !== SIZE_LIMIT
+    ) {
+      return null;
+    }
+    return state;
+  } catch {
+    return null;
+  }
+}
+
+function saveUploadState(key, file, state) {
+  try {
+    localStorage.setItem(
+      uploadStateKey(key, file),
+      JSON.stringify({ ...state, updatedAt: Date.now() })
+    );
+  } catch {
+    // Upload can still continue when localStorage is unavailable.
+  }
+}
+
+function clearUploadState(key, file) {
+  try {
+    localStorage.removeItem(uploadStateKey(key, file));
+  } catch {
+    // Nothing to clear.
+  }
+}
+
+function completedBytes(parts, fileSize) {
+  return parts.reduce((total, part) => {
+    if (!part) return total;
+    const partEnd = Math.min(part.partNumber * SIZE_LIMIT, fileSize);
+    const partStart = (part.partNumber - 1) * SIZE_LIMIT;
+    return total + Math.max(partEnd - partStart, 0);
+  }, 0);
+}
+
+export async function singleUpload(key, file, options) {
+  const headers = options?.headers || {};
+  await withUploadRetry(() =>
+    axios.put(writeItemUrl(key), file, {
+      headers,
+      onUploadProgress: options?.onUploadProgress,
+    })
+  );
 }
 
 /**
@@ -109,16 +180,39 @@ async function withUploadRetry(operation) {
 export async function multipartUpload(key, file, options) {
   const headers = options?.headers || {};
   headers["content-type"] = file.type;
-
-  const uploadId = await withUploadRetry(() =>
-    axios
-      .post(writeItemUrl(key, { uploads: "" }), "", { headers })
-      .then((res) => res.data.uploadId)
-  );
   const totalChunks = Math.ceil(file.size / SIZE_LIMIT);
+  let state = loadUploadState(key, file);
+  if (!state) {
+    const uploadId = await withUploadRetry(() =>
+      axios
+        .post(writeItemUrl(key, { uploads: "" }), "", { headers })
+        .then((res) => res.data.uploadId)
+    );
+    state = {
+      uploadId,
+      key,
+      size: file.size,
+      lastModified: file.lastModified,
+      chunkSize: SIZE_LIMIT,
+      totalChunks,
+      parts: [],
+      createdAt: Date.now(),
+    };
+    saveUploadState(key, file, state);
+  }
+  const uploadId = state.uploadId;
+  const uploadedParts = state.parts || [];
+
+  if (typeof options?.onUploadProgress === "function" && uploadedParts.length) {
+    options.onUploadProgress({
+      loaded: completedBytes(uploadedParts, file.size),
+      total: file.size,
+    });
+  }
 
   const promiseGenerator = function* () {
     for (let i = 1; i <= totalChunks; i++) {
+      if (uploadedParts[i - 1]) continue;
       const chunk = file.slice((i - 1) * SIZE_LIMIT, i * SIZE_LIMIT);
       yield withUploadRetry(() =>
         axios.put(writeItemUrl(key, { partNumber: i, uploadId }), chunk, {
@@ -137,14 +231,20 @@ export async function multipartUpload(key, file, options) {
     }
   };
 
-  const uploadedParts = [];
   for (const part of promiseGenerator()) {
     const { partNumber, etag } = await part;
     uploadedParts[partNumber - 1] = { partNumber, etag };
+    state.parts = uploadedParts;
+    saveUploadState(key, file, state);
+  }
+  const parts = uploadedParts.filter(Boolean).sort((a, b) => a.partNumber - b.partNumber);
+  if (parts.length !== totalChunks) {
+    throw new Error("Upload interrupted, please retry the same file");
   }
   await withUploadRetry(() =>
     axios.post(writeItemUrl(key, { uploadId }), {
-      parts: uploadedParts,
+      parts,
     })
   );
+  clearUploadState(key, file);
 }
