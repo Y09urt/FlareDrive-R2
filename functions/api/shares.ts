@@ -81,3 +81,24 @@ export async function onRequestPost(context) {
   const url = new URL(`/share/${encodeURIComponent(token)}`, context.request.url).toString();
   return json({ token, url }, { status: 201 });
 }
+
+export async function onRequestDelete(context) {
+  const user = await getSessionUser(context);
+  if (!user) return unauthorized();
+
+  const url = new URL(context.request.url);
+  const token = String(url.searchParams.get("token") || "");
+  if (!token) return tokenError("缺少分享链接");
+
+  const result = await context.env.DB.prepare(
+    "DELETE FROM shares WHERE token = ? AND user_id = ?"
+  )
+    .bind(token, user.id)
+    .run();
+
+  if (!result.meta?.changes) {
+    return json({ error: "分享链接不存在" }, { status: 404 });
+  }
+
+  return new Response(null, { status: 204 });
+}

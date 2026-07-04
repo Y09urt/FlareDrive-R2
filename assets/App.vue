@@ -42,6 +42,7 @@
         </a>
         <input v-model="search" type="search" placeholder="搜索文件" />
         <button type="button" @click="showPastes = !showPastes">文字暂存</button>
+        <button type="button" @click="showShares = !showShares">分享管理</button>
         <button type="button" @click="logout">退出</button>
       </header>
 
@@ -116,6 +117,25 @@
         </div>
       </section>
 
+      <section v-if="showShares" class="share-panel">
+        <div class="paste-header">
+          <h2>分享管理</h2>
+          <button type="button" @click="loadShares">刷新</button>
+        </div>
+        <ul class="share-list">
+          <li v-for="share in shares" :key="share.token" class="share-row">
+            <div>
+              <strong>{{ share.token }}</strong>
+              <small>{{ shareLabel(share) }} · {{ formatDate(share.created_at * 1000) }}</small>
+            </div>
+            <button type="button" @click="copyText(shareUrl(share))">复制</button>
+            <a :href="shareUrl(share)" target="_blank">打开</a>
+            <button class="danger" type="button" @click="deleteShare(share.token)">删除</button>
+          </li>
+        </ul>
+        <div v-if="!shares.length" class="empty">还没有分享链接</div>
+      </section>
+
       <div v-if="message" class="toast">{{ message }}</div>
     </template>
   </div>
@@ -129,7 +149,7 @@ import {
   singleUpload,
   SIZE_LIMIT,
   writeItemUrl,
-} from "/assets/main.mjs?v=20260704-share1";
+} from "/assets/main.mjs?v=20260704-share2";
 
 export default {
   data: () => ({
@@ -143,7 +163,9 @@ export default {
     loading: false,
     search: "",
     showPastes: false,
+    showShares: false,
     pastes: [],
+    shares: [],
     pasteEditor: { id: null, title: "", content: "" },
     uploadProgress: null,
     uploadQueue: [],
@@ -182,6 +204,9 @@ export default {
     },
     showPastes(value) {
       if (value) this.loadPastes();
+    },
+    showShares(value) {
+      if (value) this.loadShares();
     },
   },
 
@@ -300,10 +325,36 @@ export default {
       if (!res.ok) return this.showMessage(data.error || "创建分享失败");
       await this.copyText(data.url);
       this.showMessage("分享链接已复制");
+      if (this.showShares) await this.loadShares();
       return data;
     },
     async shareFile(key) {
       await this.createShare({ key });
+    },
+    async loadShares() {
+      const res = await fetch("/api/shares");
+      if (!res.ok) return this.showMessage("无法读取分享链接");
+      const data = await res.json();
+      this.shares = data.shares || [];
+    },
+    shareUrl(share) {
+      return `${window.location.origin}/share/${encodeURIComponent(share.token)}`;
+    },
+    shareLabel(share) {
+      if (share.kind === "paste") return `文字 #${share.paste_id}`;
+      return share.object_key || "文件";
+    },
+    async deleteShare(token) {
+      if (!window.confirm(`删除分享链接 ${token}？`)) return;
+      const res = await fetch(`/api/shares?token=${encodeURIComponent(token)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        return this.showMessage(data.error || "删除分享链接失败");
+      }
+      this.shares = this.shares.filter((share) => share.token !== token);
+      this.showMessage("分享链接已删除");
     },
     async createFolder() {
       const folderName = window.prompt("文件夹名称");

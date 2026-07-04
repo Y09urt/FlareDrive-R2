@@ -127,7 +127,7 @@ progress {
   top: 0;
   z-index: 10;
   display: grid;
-  grid-template-columns: max-content minmax(180px, 1fr) max-content max-content;
+  grid-template-columns: max-content minmax(180px, 1fr) max-content max-content max-content;
   gap: 10px;
   align-items: center;
   border-bottom: 1px solid rgba(209, 213, 219, 0.8);
@@ -160,7 +160,8 @@ progress {
 
 .sidebar,
 .file-panel,
-.paste-panel {
+.paste-panel,
+.share-panel {
   border: 1px solid rgba(255, 255, 255, 0.7);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.86);
@@ -272,6 +273,12 @@ progress {
   padding: 14px;
 }
 
+.share-panel {
+  width: min(1180px, calc(100% - 32px));
+  margin: 0 auto 28px;
+  padding: 14px;
+}
+
 .paste-header {
   display: flex;
   align-items: center;
@@ -296,6 +303,39 @@ progress {
   gap: 8px;
   max-height: 420px;
   overflow: auto;
+}
+
+.share-list {
+  display: grid;
+  gap: 8px;
+}
+
+.share-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content max-content max-content;
+  gap: 8px;
+  align-items: center;
+  border-radius: 8px;
+  background: rgba(249, 250, 251, 0.78);
+  padding: 8px;
+}
+
+.share-row div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.share-row strong,
+.share-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-row small {
+  color: #6b7280;
+  font-size: 13px;
 }
 
 .paste-list li {
@@ -352,6 +392,14 @@ progress {
 
   .file-row {
     grid-template-columns: 1fr 1fr 1fr;
+  }
+
+  .share-row {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+
+  .share-row div {
+    grid-column: 1 / -1;
   }
 
   .file-main {
