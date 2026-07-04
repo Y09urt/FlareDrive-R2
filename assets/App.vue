@@ -129,7 +129,7 @@ import {
   singleUpload,
   SIZE_LIMIT,
   writeItemUrl,
-} from "/assets/main.mjs?v=20260704-upload3";
+} from "/assets/main.mjs?v=20260704-share1";
 
 export default {
   data: () => ({
@@ -283,16 +283,27 @@ export default {
       await navigator.clipboard.writeText(text);
       this.showMessage("已复制");
     },
-    async shareFile(key) {
+    promptShareToken() {
+      const token = window.prompt("自定义分享后缀，可留空自动生成");
+      if (token === null) return null;
+      return token.trim();
+    },
+    async createShare(payload) {
+      const customToken = this.promptShareToken();
+      if (customToken === null) return null;
       const res = await fetch("/api/shares", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key }),
+        body: JSON.stringify({ ...payload, customToken }),
       });
       const data = await res.json();
       if (!res.ok) return this.showMessage(data.error || "创建分享失败");
       await this.copyText(data.url);
       this.showMessage("分享链接已复制");
+      return data;
+    },
+    async shareFile(key) {
+      await this.createShare({ key });
     },
     async createFolder() {
       const folderName = window.prompt("文件夹名称");
@@ -392,15 +403,7 @@ export default {
       await this.loadPastes();
     },
     async sharePaste(id) {
-      const res = await fetch("/api/shares", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pasteId: id }),
-      });
-      const data = await res.json();
-      if (!res.ok) return this.showMessage(data.error || "创建分享失败");
-      await this.copyText(data.url);
-      this.showMessage("分享链接已复制");
+      await this.createShare({ pasteId: id });
     },
     showMessage(message) {
       this.message = message;
