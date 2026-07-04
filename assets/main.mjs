@@ -52,9 +52,14 @@ export async function blobDigest(blob) {
   return digestHex;
 }
 
-export const SIZE_LIMIT = 6 * 1024 * 1024; // 6MiB, above R2's 5MiB multipart minimum with more room for proxy limits.
+export const SIZE_LIMIT = 6 * 1024 * 1024; // 6MiB, above R2's 5MiB multipart minimum.
+const MiB = 1024 * 1024;
 const MAX_UPLOAD_ATTEMPTS = 8;
-const MAX_UPLOAD_CONCURRENCY = 3;
+const MAX_UPLOAD_PARTS = 10000;
+const MAX_ADAPTIVE_CHUNK_SIZE = 96 * MiB;
+const TARGET_MAX_PARTS = 8000;
+const MIN_UPLOAD_CONCURRENCY = 1;
+const MAX_UPLOAD_CONCURRENCY = 5;
 const UPLOAD_STATE_PREFIX = "flaredrive:multipart:";
 
 export function encodeObjectKey(key) {
@@ -94,6 +99,39 @@ function uploadErrorMessage(error) {
   );
 }
 
+function roundUpToMiB(value) {
+  return Math.ceil(value / MiB) * MiB;
+}
+
+export function getAdaptiveChunkSize(fileSize) {
+  const chunkSize = Math.max(
+    SIZE_LIMIT,
+    roundUpToMiB(fileSize / TARGET_MAX_PARTS)
+  );
+  return Math.min(chunkSize, MAX_ADAPTIVE_CHUNK_SIZE);
+}
+
+export function getAdaptiveUploadConcurrency(fileSize, chunkSize) {
+  const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  const effectiveType = connection?.effectiveType || "";
+  const downlink = Number(connection?.downlink || 0);
+  let concurrency = 3;
+
+  if (connection?.saveData || effectiveType.includes("2g")) {
+    concurrency = 1;
+  } else if (effectiveType === "3g" || downlink > 0 && downlink < 3) {
+    concurrency = 2;
+  } else if (effectiveType === "4g" && downlink >= 15) {
+    concurrency = 4;
+  }
+
+  if (downlink >= 50) concurrency = 5;
+  if (fileSize < chunkSize * 3) concurrency = 1;
+  if (fileSize < chunkSize * 8) concurrency = Math.min(concurrency, 2);
+
+  return Math.max(MIN_UPLOAD_CONCURRENCY, Math.min(MAX_UPLOAD_CONCURRENCY, concurrency));
+}
+
 async function withUploadRetry(operation) {
   let lastError;
   for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
@@ -116,7 +154,7 @@ function uploadStateKey(key, file) {
   return `${UPLOAD_STATE_PREFIX}${key}:${file.name}:${file.size}:${file.lastModified}`;
 }
 
-function loadUploadState(key, file) {
+function loadUploadState(key, file, chunkSize) {
   try {
     const value = localStorage.getItem(uploadStateKey(key, file));
     if (!value) return null;
@@ -125,7 +163,7 @@ function loadUploadState(key, file) {
       state.key !== key ||
       state.size !== file.size ||
       state.lastModified !== file.lastModified ||
-      state.chunkSize !== SIZE_LIMIT
+      state.chunkSize !== chunkSize
     ) {
       return null;
     }
@@ -154,23 +192,26 @@ function clearUploadState(key, file) {
   }
 }
 
-function completedBytes(parts, fileSize) {
+function completedBytes(parts, fileSize, chunkSize) {
   return parts.reduce((total, part) => {
     if (!part) return total;
-    const partEnd = Math.min(part.partNumber * SIZE_LIMIT, fileSize);
-    const partStart = (part.partNumber - 1) * SIZE_LIMIT;
+    const partEnd = Math.min(part.partNumber * chunkSize, fileSize);
+    const partStart = (part.partNumber - 1) * chunkSize;
     return total + Math.max(partEnd - partStart, 0);
   }, 0);
 }
 
-function emitUploadProgress(options, uploadedParts, inFlightProgress, fileSize) {
+function emitUploadProgress(options, uploadedParts, inFlightProgress, fileSize, chunkSize) {
   if (typeof options?.onUploadProgress !== "function") return;
   const inFlightBytes = Object.values(inFlightProgress).reduce(
     (total, loaded) => total + loaded,
     0
   );
   options.onUploadProgress({
-    loaded: Math.min(completedBytes(uploadedParts, fileSize) + inFlightBytes, fileSize),
+    loaded: Math.min(
+      completedBytes(uploadedParts, fileSize, chunkSize) + inFlightBytes,
+      fileSize
+    ),
     total: fileSize,
   });
 }
@@ -193,8 +234,13 @@ export async function singleUpload(key, file, options) {
 export async function multipartUpload(key, file, options) {
   const headers = options?.headers || {};
   headers["content-type"] = file.type;
-  const totalChunks = Math.ceil(file.size / SIZE_LIMIT);
-  let state = loadUploadState(key, file);
+  const chunkSize = getAdaptiveChunkSize(file.size);
+  const totalChunks = Math.ceil(file.size / chunkSize);
+  if (totalChunks > MAX_UPLOAD_PARTS) {
+    throw new Error("File is too large for browser upload; use a larger upload route");
+  }
+
+  let state = loadUploadState(key, file, chunkSize);
   if (!state) {
     const uploadId = await withUploadRetry(() =>
       axios
@@ -206,7 +252,7 @@ export async function multipartUpload(key, file, options) {
       key,
       size: file.size,
       lastModified: file.lastModified,
-      chunkSize: SIZE_LIMIT,
+      chunkSize,
       totalChunks,
       parts: [],
       createdAt: Date.now(),
@@ -217,7 +263,7 @@ export async function multipartUpload(key, file, options) {
   const uploadedParts = state.parts || [];
 
   const inFlightProgress = {};
-  emitUploadProgress(options, uploadedParts, inFlightProgress, file.size);
+  emitUploadProgress(options, uploadedParts, inFlightProgress, file.size, chunkSize);
 
   const missingPartNumbers = [];
   for (let i = 1; i <= totalChunks; i++) {
@@ -226,14 +272,14 @@ export async function multipartUpload(key, file, options) {
 
   let nextPartIndex = 0;
   async function uploadPart(partNumber) {
-    const chunk = file.slice((partNumber - 1) * SIZE_LIMIT, partNumber * SIZE_LIMIT);
+    const chunk = file.slice((partNumber - 1) * chunkSize, partNumber * chunkSize);
     const res = await withUploadRetry(() => {
       inFlightProgress[partNumber] = 0;
-      emitUploadProgress(options, uploadedParts, inFlightProgress, file.size);
+      emitUploadProgress(options, uploadedParts, inFlightProgress, file.size, chunkSize);
       return axios.put(writeItemUrl(key, { partNumber, uploadId }), chunk, {
           onUploadProgress(progressEvent) {
             inFlightProgress[partNumber] = progressEvent.loaded || 0;
-            emitUploadProgress(options, uploadedParts, inFlightProgress, file.size);
+            emitUploadProgress(options, uploadedParts, inFlightProgress, file.size, chunkSize);
           },
       });
     });
@@ -241,7 +287,7 @@ export async function multipartUpload(key, file, options) {
     uploadedParts[partNumber - 1] = { partNumber, etag: res.headers.etag };
     state.parts = uploadedParts;
     saveUploadState(key, file, state);
-    emitUploadProgress(options, uploadedParts, inFlightProgress, file.size);
+    emitUploadProgress(options, uploadedParts, inFlightProgress, file.size, chunkSize);
   }
 
   async function uploadWorker() {
@@ -251,7 +297,8 @@ export async function multipartUpload(key, file, options) {
     }
   }
 
-  const workerCount = Math.min(MAX_UPLOAD_CONCURRENCY, missingPartNumbers.length);
+  const concurrency = getAdaptiveUploadConcurrency(file.size, chunkSize);
+  const workerCount = Math.min(concurrency, missingPartNumbers.length);
   await Promise.all(Array.from({ length: workerCount }, () => uploadWorker()));
 
   const parts = uploadedParts.filter(Boolean).sort((a, b) => a.partNumber - b.partNumber);

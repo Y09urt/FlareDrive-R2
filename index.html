@@ -9,7 +9,7 @@
     <script data-cfasync="false" src="https://cdn.jsdmirror.com/npm/vue3-sfc-loader@0.9.5/dist/vue3-sfc-loader.min.js"></script>
     <script defer src="https://events.vercount.one/js"></script>
     <link rel='stylesheet' href='https://static.zeoseven.com/zsft/243/main/result.css' />
-    <link rel="prefetch" href="/assets/main.mjs?v=20260704-speed1" />
+    <link rel="prefetch" href="/assets/main.mjs?v=20260704-adaptive1" />
     <link rel="stylesheet" href="/assets/main.css" />
     <link rel="manifest" href="/assets/manifest.json" />
     <link rel="icon" type="image/png" href="/favicon.ico" />
@@ -41,7 +41,7 @@
       const app = Vue.createApp({
         components: {
           App: Vue.defineAsyncComponent(() =>
-            loadModule("/assets/App.vue?v=20260704-speed1", options)
+            loadModule("/assets/App.vue?v=20260704-adaptive1", options)
           ),
         },
         template: "<App></App>",
