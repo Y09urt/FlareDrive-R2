@@ -51,7 +51,8 @@ button.danger {
 }
 
 input,
-textarea {
+textarea,
+select {
   width: 100%;
   border: 1px solid #d1d5db;
   border-radius: 8px;
@@ -127,7 +128,7 @@ progress {
   top: 0;
   z-index: 10;
   display: grid;
-  grid-template-columns: max-content minmax(180px, 1fr) max-content max-content max-content;
+  grid-template-columns: max-content minmax(180px, 1fr) repeat(4, max-content);
   gap: 10px;
   align-items: center;
   border-bottom: 1px solid rgba(209, 213, 219, 0.8);
@@ -183,6 +184,7 @@ progress {
 }
 
 .sidebar span,
+.sidebar small,
 .file-row small,
 .paste-list small {
   color: #6b7280;
@@ -363,6 +365,43 @@ progress {
   gap: 10px;
 }
 
+.admin-grid {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 14px;
+}
+
+.admin-form,
+.user-list {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.user-row {
+  border-radius: 8px;
+  background: rgba(249, 250, 251, 0.78);
+  padding: 10px;
+}
+
+.user-row div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.user-row strong,
+.user-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-row small {
+  color: #6b7280;
+  font-size: 13px;
+}
+
 .toast {
   position: fixed;
   right: 18px;
@@ -386,12 +425,13 @@ progress {
   }
 
   .workspace,
-  .paste-grid {
+  .paste-grid,
+  .admin-grid {
     grid-template-columns: 1fr;
   }
 
   .file-row {
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: 1fr 1fr;
   }
 
   .share-row {

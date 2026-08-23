@@ -158,12 +158,13 @@ export async function getSessionUser(context: any) {
   const tokenHash = await digestHex(token);
   const now = Math.floor(Date.now() / 1000);
   return context.env.DB.prepare(
-    `SELECT users.id, users.username, users.role
+    `SELECT users.id, users.username, users.role, users.access_mode, users.expires_at
      FROM sessions
      JOIN users ON users.id = sessions.user_id
-     WHERE sessions.token_hash = ? AND sessions.expires_at > ?`
-  )
-    .bind(tokenHash, now)
+     WHERE sessions.token_hash = ? AND sessions.expires_at > ?
+       AND (users.expires_at IS NULL OR users.expires_at > ?)`
+    )
+    .bind(tokenHash, now, now)
     .first();
 }
 
@@ -189,11 +190,27 @@ export async function get_allow_list(context: any) {
   return getBasicAuthAllowList(context);
 }
 
-export async function can_access_path(context: any, targetPath: string) {
+export function canPerform(user: any, operation: "read" | "write" | "list") {
+  if (!user) return false;
+  if (user.role === "admin") return true;
+  const mode = user.access_mode || "read_write";
+  if (operation === "list") return true;
+  if (operation === "read") return mode === "read_write" || mode === "download_only";
+  if (operation === "write") return mode === "read_write" || mode === "upload_only";
+  return false;
+}
+
+export async function can_access_path(
+  context: any,
+  targetPath: string,
+  operation: "read" | "write" | "list" = "read"
+) {
   if (targetPath.startsWith(THUMBNAIL_PREFIX)) return true;
   const allowList = await get_allow_list(context);
   if (!allowList) return false;
-  return matchesAllowList(targetPath, allowList);
+  if (!matchesAllowList(targetPath, allowList)) return false;
+  const user = await getSessionUser(context);
+  return canPerform(user, operation);
 }
 
 export async function get_auth_status(context: any) {
@@ -205,7 +222,7 @@ export async function get_auth_status(context: any) {
   } catch {
     return false;
   }
-  return can_access_path(context, targetPath);
+  return can_access_path(context, targetPath, "write");
 }
 
 export function publicUser(user: any) {
@@ -214,6 +231,8 @@ export function publicUser(user: any) {
     id: user.id,
     username: user.username,
     role: user.role,
+    accessMode: user.access_mode || "read_write",
+    expiresAt: user.expires_at || null,
     homePrefix: user.role === "admin" ? "" : `users/${user.id}/`,
   };
 }

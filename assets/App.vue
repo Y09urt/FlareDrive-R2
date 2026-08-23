@@ -43,6 +43,9 @@
         <input v-model="search" type="search" placeholder="搜索文件" />
         <button type="button" @click="showPastes = !showPastes">文字暂存</button>
         <button type="button" @click="showShares = !showShares">分享管理</button>
+        <button v-if="user.role === 'admin'" type="button" @click="showUsers = !showUsers">
+          账户管理
+        </button>
         <button type="button" @click="logout">退出</button>
       </header>
 
@@ -51,9 +54,10 @@
           <div>
             <strong>{{ user.username }}</strong>
             <span>{{ user.role === "admin" ? "管理员" : "普通用户" }}</span>
+            <small>{{ accessModeLabel(user.accessMode) }}</small>
           </div>
-          <button type="button" @click="$refs.fileInput.click()">上传文件</button>
-          <button type="button" @click="createFolder">新建文件夹</button>
+          <button v-if="canUpload" type="button" @click="$refs.fileInput.click()">上传文件</button>
+          <button v-if="canUpload" type="button" @click="createFolder">新建文件夹</button>
           <button type="button" @click="refresh">刷新</button>
           <input ref="fileInput" type="file" multiple hidden @change="onUploadPicked" />
         </aside>
@@ -70,21 +74,22 @@
                 <span class="file-icon">目录</span>
                 <span>{{ folderName(folder) }}</span>
               </button>
-              <button type="button" @click="copyText(folderLink(folder))">复制链接</button>
-              <button class="danger" type="button" @click="removeFile(folder + '_$folder$')">删除</button>
+              <button v-if="canDownload" type="button" @click="copyText(folderLink(folder))">复制链接</button>
+              <button v-if="canDeleteFolders" class="danger" type="button" @click="removeFile(folder + '_$folder$')">删除</button>
             </li>
 
             <li v-for="file in filteredFiles" :key="file.key" class="file-row">
-              <button class="file-main" type="button" @click="preview(file.key)">
+              <button class="file-main" type="button" @click="canDownload && preview(file.key)">
                 <span class="file-icon">文件</span>
                 <span>
                   <strong>{{ fileName(file.key) }}</strong>
                   <small>{{ formatSize(file.size) }} · {{ formatDate(file.uploaded) }}</small>
+                  <small>来源：{{ fileSource(file) }}</small>
                 </span>
               </button>
-              <a :href="`/raw/${file.key}`" download>下载</a>
-              <button type="button" @click="shareFile(file.key)">分享</button>
-              <button class="danger" type="button" @click="removeFile(file.key)">删除</button>
+              <a v-if="canDownload" :href="`/raw/${file.key}`" download>下载</a>
+              <button v-if="canShare" type="button" @click="shareFile(file.key)">分享</button>
+              <button v-if="canDeleteFile(file)" class="danger" type="button" @click="removeFile(file.key)">删除</button>
             </li>
           </ul>
 
@@ -136,6 +141,39 @@
         <div v-if="!shares.length" class="empty">还没有分享链接</div>
       </section>
 
+      <section v-if="showUsers && user.role === 'admin'" class="share-panel">
+        <div class="paste-header">
+          <h2>账户管理</h2>
+          <button type="button" @click="loadUsers">刷新</button>
+        </div>
+        <div class="admin-grid">
+          <form class="admin-form" @submit.prevent="createUser">
+            <input v-model.trim="userEditor.username" placeholder="账号" required />
+            <input v-model="userEditor.password" type="password" placeholder="密码" minlength="8" required />
+            <select v-model="userEditor.role">
+              <option value="user">普通用户</option>
+              <option value="admin">管理员</option>
+            </select>
+            <select v-model="userEditor.accessMode">
+              <option value="upload_only">仅上传</option>
+              <option value="download_only">仅下载</option>
+              <option value="read_write">可上传下载</option>
+            </select>
+            <input v-model="userEditor.expiresAt" type="datetime-local" />
+            <button class="primary" type="submit">创建用户</button>
+          </form>
+          <ul class="user-list">
+            <li v-for="account in users" :key="account.id" class="user-row">
+              <div>
+                <strong>{{ account.username }}</strong>
+                <small>{{ account.role }} · {{ accessModeLabel(account.accessMode) }}</small>
+                <small>有效期：{{ formatExpiry(account.expiresAt) }}</small>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </section>
+
       <div v-if="message" class="toast">{{ message }}</div>
     </template>
   </div>
@@ -164,9 +202,18 @@ export default {
     search: "",
     showPastes: false,
     showShares: false,
+    showUsers: false,
     pastes: [],
     shares: [],
+    users: [],
     pasteEditor: { id: null, title: "", content: "" },
+    userEditor: {
+      username: "",
+      password: "",
+      role: "user",
+      accessMode: "read_write",
+      expiresAt: "",
+    },
     uploadProgress: null,
     uploadQueue: [],
     message: "",
@@ -192,6 +239,18 @@ export default {
         this.folderName(folder).toLowerCase().includes(this.search.toLowerCase())
       );
     },
+    canUpload() {
+      return this.user?.role === "admin" || this.user?.accessMode !== "download_only";
+    },
+    canDownload() {
+      return this.user?.role === "admin" || this.user?.accessMode !== "upload_only";
+    },
+    canShare() {
+      return this.user?.role === "admin" || this.user?.accessMode !== "upload_only";
+    },
+    canDeleteFolders() {
+      return this.user?.role === "admin";
+    },
   },
 
   watch: {
@@ -207,6 +266,9 @@ export default {
     },
     showShares(value) {
       if (value) this.loadShares();
+    },
+    showUsers(value) {
+      if (value) this.loadUsers();
     },
   },
 
@@ -227,6 +289,7 @@ export default {
       if (this.user) {
         if (!this.cwd && this.user.homePrefix) this.cwd = this.user.homePrefix;
         await this.fetchFiles();
+        if (this.user.role === "admin") await this.loadUsers();
       }
     },
     toggleAuthMode() {
@@ -269,6 +332,30 @@ export default {
       this.files = data.value || [];
       this.folders = data.folders || [];
       this.loading = false;
+    },
+    fileSource(file) {
+      if (this.user?.role === "admin") {
+        return file.ownerUsername || `用户 #${file.ownerId || "未知"}`;
+      }
+      return "当前账号";
+    },
+    canDeleteFile(file) {
+      if (this.user?.role === "admin") return true;
+      if (this.user?.accessMode === "upload_only") return false;
+      return file.ownerId === this.user?.id;
+    },
+    accessModeLabel(value) {
+      return (
+        {
+          upload_only: "仅上传",
+          download_only: "仅下载",
+          read_write: "可上传下载",
+        }[value] || "可上传下载"
+      );
+    },
+    formatExpiry(value) {
+      if (!value) return "永久";
+      return new Date(value * 1000).toLocaleString();
     },
     refresh() {
       this.fetchFiles();
@@ -361,6 +448,39 @@ export default {
       if (!folderName) return;
       await axios.put(writeItemUrl(`${this.cwd}${folderName}/_$folder$`), "");
       await this.fetchFiles();
+    },
+    async loadUsers() {
+      const res = await fetch("/api/admin/users");
+      if (!res.ok) return this.showMessage("无法读取账户列表");
+      const data = await res.json();
+      this.users = data.users || [];
+    },
+    async createUser() {
+      const expiresAt = this.userEditor.expiresAt
+        ? Math.floor(new Date(this.userEditor.expiresAt).getTime() / 1000)
+        : "";
+      const res = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: this.userEditor.username,
+          password: this.userEditor.password,
+          role: this.userEditor.role,
+          accessMode: this.userEditor.accessMode,
+          expiresAt,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return this.showMessage(data.error || "创建用户失败");
+      this.users.unshift(data.user);
+      this.userEditor = {
+        username: "",
+        password: "",
+        role: "user",
+        accessMode: "read_write",
+        expiresAt: "",
+      };
+      this.showMessage("用户已创建");
     },
     async removeFile(key) {
       if (!window.confirm(`删除 ${key}？`)) return;

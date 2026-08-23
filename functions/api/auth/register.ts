@@ -27,18 +27,20 @@ export async function onRequestPost(context) {
 
   const passwordHash = await hashPassword(password);
   const role = isFirstUser ? "admin" : "user";
+  const accessMode = isFirstUser ? "read_write" : "read_write";
 
   try {
     const result = await context.env.DB.prepare(
-      "INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)"
+      "INSERT INTO users (username, password_hash, role, access_mode, created_at) VALUES (?, ?, ?, ?, ?)"
     )
-      .bind(username, passwordHash, role, new Date().toISOString())
+      .bind(username, passwordHash, role, accessMode, new Date().toISOString())
       .run();
 
     const user = {
       id: result.meta.last_row_id,
       username,
       role,
+      access_mode: accessMode,
     };
     const session = await createSession(context, user.id);
     return json(

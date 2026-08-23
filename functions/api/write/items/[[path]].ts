@@ -1,5 +1,5 @@
 import { notFound, parseBucketPath } from "@/utils/bucket";
-import { get_auth_status, json, unauthorized } from "@/utils/auth";
+import { getSessionUser, get_auth_status, json, unauthorized } from "@/utils/auth";
 
 async function requireWriteAccess(context: any) {
   if (await get_auth_status(context)) return null;
@@ -16,6 +16,24 @@ function uploadError(error: any) {
   return json({ error: message }, { status: 500 });
 }
 
+async function buildCustomMetadata(context: any, request: Request, source?: any) {
+  const customMetadata: Record<string, string> = {};
+  const user = await getSessionUser(context);
+
+  if (request.headers.has("fd-thumbnail")) {
+    customMetadata.thumbnail = request.headers.get("fd-thumbnail") || "";
+  } else if (source?.customMetadata?.thumbnail) {
+    customMetadata.thumbnail = source.customMetadata.thumbnail;
+  }
+
+  if (user) {
+    customMetadata.ownerId = String(user.id);
+    customMetadata.ownerUsername = String(user.username);
+  }
+
+  return customMetadata;
+}
+
 export async function onRequestPostCreateMultipart(context) {
   const denied = await requireWriteAccess(context);
   if (denied) return denied;
@@ -25,10 +43,7 @@ export async function onRequestPostCreateMultipart(context) {
   if (!path) return badRequest("Missing object key");
 
   const request: Request = context.request;
-  const customMetadata: Record<string, string> = {};
-  if (request.headers.has("fd-thumbnail")) {
-    customMetadata.thumbnail = request.headers.get("fd-thumbnail");
-  }
+  const customMetadata = await buildCustomMetadata(context, request);
 
   let multipartUpload;
   try {
@@ -138,23 +153,17 @@ export async function onRequestPut(context) {
 
   const request: Request = context.request;
   let content = request.body;
-  const customMetadata: Record<string, string> = {};
+  let source: any = null;
 
   if (request.headers.has("x-amz-copy-source")) {
     const sourceName = decodeURIComponent(
       request.headers.get("x-amz-copy-source")
     );
-    const source = await bucket.get(sourceName);
+    source = await bucket.get(sourceName);
     if (!source) return notFound();
     content = source.body;
-    if (source.customMetadata?.thumbnail) {
-      customMetadata.thumbnail = source.customMetadata.thumbnail;
-    }
   }
-
-  if (request.headers.has("fd-thumbnail")) {
-    customMetadata.thumbnail = request.headers.get("fd-thumbnail");
-  }
+  const customMetadata = await buildCustomMetadata(context, request, source);
 
   let obj;
   try {
@@ -174,12 +183,23 @@ export async function onRequestPut(context) {
 }
 
 export async function onRequestDelete(context) {
-  const denied = await requireWriteAccess(context);
-  if (denied) return denied;
+  const user = await getSessionUser(context);
+  if (!user) return unauthorized("没有操作权限");
 
   const [bucket, path] = parseBucketPath(context);
   if (!bucket) return notFound();
   if (!path) return badRequest("Missing object key");
+
+  if (user.role !== "admin") {
+    if (user.access_mode === "upload_only") {
+      return unauthorized("仅上传账号不能删除文件");
+    }
+    const object = await bucket.head(path);
+    if (!object) return notFound();
+    if (object.customMetadata?.ownerId !== String(user.id)) {
+      return unauthorized("只能删除自己上传的文件");
+    }
+  }
 
   await bucket.delete(path);
   return new Response(null, { status: 204 });

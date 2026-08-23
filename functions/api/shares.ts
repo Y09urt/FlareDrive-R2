@@ -51,7 +51,7 @@ export async function onRequestPost(context) {
   const expiresAt = body.expiresAt ? Number(body.expiresAt) : null;
 
   if (kind === "file") {
-    if (!key || !(await can_access_path(context, key))) {
+    if (!key || !(await can_access_path(context, key, "read"))) {
       return json({ error: "没有分享该文件的权限" }, { status: 403 });
     }
   } else {

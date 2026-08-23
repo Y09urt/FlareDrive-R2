@@ -1,5 +1,11 @@
 import { notFound, parseBucketPath } from "@/utils/bucket";
-import { can_access_path, get_allow_list, unauthorized } from "@/utils/auth";
+import {
+  canPerform,
+  can_access_path,
+  getSessionUser,
+  get_allow_list,
+  unauthorized,
+} from "@/utils/auth";
 
 export async function onRequestGet(context) {
   try {
@@ -7,9 +13,17 @@ export async function onRequestGet(context) {
     const prefix = path && `${path}/`;
     if (!bucket || prefix.startsWith("_$flaredrive$/")) return notFound();
 
+    const user = await getSessionUser(context);
+    if (!user) return unauthorized("没有读取权限");
+    if (!canPerform(user, "list")) {
+      return new Response(JSON.stringify({ value: [], folders: [] }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     const allowList = await get_allow_list(context);
     if (!allowList) return unauthorized("没有读取权限");
-    if (prefix && !(await can_access_path(context, prefix))) {
+    if (prefix && !(await can_access_path(context, prefix, "list"))) {
       return unauthorized("没有读取权限");
     }
 
@@ -23,7 +37,15 @@ export async function onRequestGet(context) {
       .filter((obj) => !obj.key.endsWith("/_$folder$"))
       .map((obj) => {
         const { key, size, uploaded, httpMetadata, customMetadata } = obj;
-        return { key, size, uploaded, httpMetadata, customMetadata };
+        return {
+          key,
+          size,
+          uploaded,
+          httpMetadata,
+          customMetadata,
+          ownerId: customMetadata?.ownerId ? Number(customMetadata.ownerId) : null,
+          ownerUsername: customMetadata?.ownerUsername || "",
+        };
       });
 
     let folders = objList.delimitedPrefixes;
@@ -39,6 +61,12 @@ export async function onRequestGet(context) {
       for (const allow of allowList) {
         if (!folders.includes(allow)) folders.push(allow);
       }
+    }
+
+    if (user.role !== "admin") {
+      objKeys = objKeys.filter(
+        (obj) => !obj.ownerId || obj.ownerId === Number(user.id)
+      );
     }
 
     return new Response(JSON.stringify({ value: objKeys, folders }), {
